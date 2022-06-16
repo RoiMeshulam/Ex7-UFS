@@ -2,7 +2,13 @@ CC=gcc
 AR=ar
 FLAGS= -Wall -g
 
-all: test mymkfs_test
+all: test mymkfs_test myFILE_test
+
+myFILE_test: myFile.o myFILE_test.o mymkfs.o
+	$(CC) $(FLAGS) -o myFILE_test myFILE_test.o mymkfs.o myFile.o
+
+myFILE_test.o: myFILE_test.c
+	$(CC) $(FLAGS) -c myFILE_test.c
 
 mymkfs_test: mymkfs_test.o mymkfs.o
 	$(CC) $(FLAGS) -o mymkfs_test mymkfs_test.o mymkfs.o
@@ -24,4 +30,4 @@ myFile.o: myFILE.c mymkfs.h myFILE.h
 
 .PHONY: clean all
 clean:
-	rm -f *.o test mymkfs_test
+	rm -f *.o test mymkfs_test myFILE_test

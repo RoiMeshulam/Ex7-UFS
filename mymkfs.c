@@ -21,6 +21,10 @@ struct inode *inodes;
 struct disk_block *dbs;
 struct myopenfile *mof=NULL;
 
+int get_size_inodes(int myfd) {
+    return inodes[mof[myfd].myfd].datasize;
+}
+
 void clean_data(int myfd){
     int currblock = inodes[mof[myfd].myfd].first_block;
     while (currblock!= -2){
@@ -30,9 +34,9 @@ void clean_data(int myfd){
     mof[myfd].curr_seek=0;
 }
 
-void sync_fs(){
+void sync_fs(const char *source){
     FILE *file;
-    file = fopen("mkfs","w");
+    file = fopen(source,"w");
     fwrite(&sb,sizeof(struct superblock),1,file);
 
     for (int j = 0; j <sb.num_inodes ; ++j) {
@@ -70,11 +74,7 @@ int readFromBlocks(int myfd,int pos, char *buf , size_t count){
     }
     int seek = pos % DATASIZE;
     for (int i = 0; i < count ; ++i) {
-        if (seek==DATASIZE){
-            seek=0;
-        }
-        buf[i]=dbs[currBlock].data[seek++];
-        mof[myfd].curr_seek++;
+       buf[i]=dbs[currBlock].data[(seek++)%DATASIZE];
     }
     return count; // count of bytes  read;
 
@@ -92,13 +92,9 @@ int writeToBlocks(int myfd , int pos ,char* data , int count){
         if (seek==DATASIZE){
             seek=0;
         }
-        if (data[i]=='\0'){
-            inodes[mof[myfd].myfd].datasize++;
-        }
         dbs[currBlock].data[seek++]= data[i];
-        mof[myfd].curr_seek++;
-
     }
+    inodes[mof[myfd].myfd].datasize+=count;
     return count;
 }
 
@@ -194,10 +190,11 @@ void mymkfs(size_t s) {
     sb.num_blocks=(s-x- sizeof(struct superblock));
     sb.num_blocks = sb.num_blocks / sb.size_blocks;
     sb.size_blocks=sizeof (struct disk_block);
+    printf("SuperBlock information:\n");
     printf("sb.num_inodes : %d\n",sb.num_inodes);
     printf("sb.num_blocks : %d\n",sb.num_blocks);
     printf("sb.size_blocks : %d\n",sb.size_blocks);
-
+    printf("\n");
     inodes=malloc(sizeof(struct inode) * sb.num_inodes);
     for (int i = 0; i <sb.num_inodes ; ++i) {
         inodes[i].number_of_blocks = -1;
@@ -206,66 +203,99 @@ void mymkfs(size_t s) {
         inodes[i].datasize=0;
         inodes[i].isDir=0;
     }
-
     dbs = malloc(sizeof(struct disk_block) * sb.num_blocks);
     for (int i = 0; i <sb.num_blocks ; ++i) {
         dbs[i].next_block_num = -1;
         memset(dbs[i].data,'\0',DATASIZE);
     }
 
-    mof=malloc(sizeof(struct myopenfile) * MAX_FILES);
-    for (int i = 0; i < MAX_FILES; ++i) {
-        mof[i].myfd = -1;
-        mof[i].flag = -1;
-        mof[i].curr_seek = -1;
-    }
-
-    //making root dir
-    int newInode = add_new_inode("root");
-    int empty = find_empty_block();
-    inodes[newInode].first_block=empty;
-    inodes[newInode].number_of_blocks=1;
-    inodes[newInode].isDir=1;
-    inodes[newInode].datasize=0;
-    int myfd = add_to_myopenfile(newInode,-1);
-    struct mydirent *root = malloc(sizeof(struct mydirent));
-    for (size_t i = 0; i < 12; i++) {
-        root->fds[i]=-1;
-    }
-    strcpy(root->name,"root"); // first name in names[] is the dirname ("root")
-    root->size=0;
-    char *write_blocks = (char*)root;
-    writeToBlocks(mof[myfd].myfd,0,write_blocks, sizeof(struct mydirent));
-    inodes[newInode].datasize=sizeof(struct mydirent);
-    free(root);
-    sync_fs();
 }
 
-// load the file system
-int mymount(){
-    if (mof!=NULL){
+int mymount(const char *source, const char *target,const char *filesystemtype, unsigned long mountflags, const void *data){
+    // there is available disk already
+    strcpy(sb.disk_name,source);
+    if (access( source, F_OK ) != -1){
+        if(inodes==NULL && dbs == NULL){
+            mymkfs(10000); // default size of my disk
+        }
+
+        mof=malloc(sizeof(struct myopenfile) * MAX_FILES);
+        for (int i = 0; i < MAX_FILES; ++i) {
+            mof[i].myfd = -1;
+            mof[i].flag = -1;
+            mof[i].curr_seek = -1;
+        }
+        char temp[100];
+        strcpy(temp, target);
+        char *token;
+        const char s[2] = "/";
+        token = strtok(temp, s);
+
+        // making dir for my root directory
+        int newInode = add_new_inode(token);
+        int empty = find_empty_block();
+        inodes[newInode].first_block=empty;
+        inodes[newInode].number_of_blocks=1;
+        inodes[newInode].isDir=1;
+        inodes[newInode].datasize=0;
+        int myfd = add_to_myopenfile(newInode,-1);
+        struct mydirent *root = malloc(sizeof(struct mydirent));
+        for (size_t i = 0; i < 12; i++) {
+            root->fds[i]=-1;
+        }
+        strcpy(root->name,token); // first name in names[] is the dirname ("root")
+        root->size=0;
+        char *write_blocks = (char*)root;
+        writeToBlocks(mof[myfd].myfd,0,write_blocks, sizeof(struct mydirent));
+        inodes[newInode].datasize=sizeof(struct mydirent);
+        free(root);
+
+        token = strtok(NULL, s);
+        // open all the dirs of target
+        if (token!=NULL){
+            myopendir(target);
+        }
+        sync_fs(source);
+        return 1;
+    }else{
+        mymkfs(10000); // 10000 is my default size
+        mof=malloc(sizeof(struct myopenfile) * MAX_FILES);
+        for (int i = 0; i < MAX_FILES; ++i) {
+            mof[i].myfd = -1;
+            mof[i].flag = -1;
+            mof[i].curr_seek = -1;
+        }
+        char temp[100];
+        strcpy(temp, target);
+        char *token;
+        const char s[2] = "/";
+        token = strtok(temp, s);
+        // making dir for my root directory
+        int newInode = add_new_inode(token);
+        int empty = find_empty_block();
+        inodes[newInode].first_block=empty;
+        inodes[newInode].number_of_blocks=1;
+        inodes[newInode].isDir=1;
+        inodes[newInode].datasize=0;
+        int myfd = add_to_myopenfile(newInode,-1);
+        struct mydirent *root = malloc(sizeof(struct mydirent));
+        for (size_t i = 0; i < 12; i++) {
+            root->fds[i]=-1;
+        }
+        strcpy(root->name,token); // first name in names[] is the dirname ("root")
+        root->size=0;
+        char *write_blocks = (char*)root;
+        writeToBlocks(mof[myfd].myfd,0,write_blocks, sizeof(struct mydirent));
+        inodes[newInode].datasize=sizeof(struct mydirent);
+        free(root);
+        token = strtok(NULL, s);
+        // open all the dirs of target
+        if (token!=NULL){
+            myopendir(target);
+        }
+        sync_fs(source);
         return 1;
     }
-    //initialization of myopenfile
-    mof=malloc(sizeof(struct myopenfile) * MAX_FILES);
-    for (int i = 0; i < MAX_FILES; ++i) {
-        mof[i].myfd = -1;
-        mof[i].flag = -1;
-        mof[i].curr_seek = -1;
-    }
-
-    FILE *file;
-    file = fopen ("mkfs","r");
-
-    //superblock
-    fread(&sb, sizeof(struct superblock),1,file);
-
-    inodes=malloc(sizeof(struct inode) * sb.num_inodes);
-    dbs = malloc(sizeof(struct disk_block) * sb.num_blocks);
-
-    fread(inodes, sizeof(struct inode), sb.num_inodes,file);
-    fread(dbs, sizeof(struct disk_block), sb.num_blocks,file);
-
     return -1;
 }
 
@@ -309,16 +339,21 @@ int myopen(const char *pathname,int flags){
     }
 
     //curr_name does not exist
-    if (flags==O_RDONLY || flags == O_RDWR){ // These flags don't make a new file if it doesn't exist.
+    if (flags == O_RDONLY){ // These flags don't make a new file if it doesn't exist.
         return -1;
     }
+//    printf("path: %s\n",path_without_last);
     myDIR *dirfd = myopendir(path_without_last);
+//    printf("last dir fd is %d\n",dirfd->dirp);
+//    printf("last dir pos is %d\n",dirfd->pos);
     if (dirfd->dirp == -1 ){
         perror("cannot open this dir\n");
         return -1;
     }
 
     int dirBlock = inodes[mof[dirfd->dirp].myfd].first_block;
+//    printf("mof[dirfd->dirp].myfd = %d\n",mof[dirfd->dirp].myfd);
+//    printf("dirblock = %d\n",dirBlock);
     struct mydirent* prevDir = (struct mydirent*)dbs[dirBlock].data;
     for (int i = 0; i < 12 ; ++i) {
         if (prevDir->fds[i]==-1){ // find fd empty in pervDir
@@ -335,16 +370,21 @@ int myopen(const char *pathname,int flags){
             inodes[prevDir->fds[i]].isDir = 2; // isFile
             prevDir->size++;
             int p = add_to_myopenfile(prevDir->fds[i],flags);
-            sync_fs();
+            sync_fs(sb.disk_name);
+//            printf("new check %d\n",p);
             return p;
         }
     }
+//    printf("checkkkkkkkkkkkkkkkkkkkkkkk\n");
     return -1;
 }
 
 int myclose(int myfd){
     if(mof==NULL){
         printf("my mount didn't happen yet\n");
+        return -1;
+    }
+    if (myfd<0){
         return -1;
     }
     if (mof[myfd].myfd>=0){
@@ -354,8 +394,7 @@ int myclose(int myfd){
         return 1;
 
     }
-    printf("their is no openfile with this myfd\n");
-    return -1; //
+    return -1;
 
 }
 
@@ -395,6 +434,7 @@ ssize_t myread(int myfd,char *buf,size_t count){
             return -1;
         }else{
             int bytes=readFromBlocks(inodes[mof[myfd].myfd].first_block,mof[myfd].curr_seek,buf,count);
+            mof[myfd].curr_seek+=bytes;
             return bytes; // how mauch i read
         }
     }
@@ -411,11 +451,12 @@ ssize_t mywrite(int myfd,const void *buf,size_t count){
             inodes[mof[myfd].myfd].first_block = find_empty_block();
             set_filesize(mof[myfd].myfd, count);
             int bytes = writeToBlocks(inodes[mof[myfd].myfd].first_block, mof[myfd].curr_seek, buf, count);
+            mof[myfd].curr_seek+=bytes;
             inodes[mof[myfd].myfd].number_of_blocks = (count + DATASIZE) / DATASIZE;
-            printf("1) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
-            printf("1) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
-            printf("1) curr_seek: %d\n", mof[myfd].curr_seek);
-            sync_fs();
+//            printf("1) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
+//            printf("1) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
+//            printf("1) curr_seek: %d\n", mof[myfd].curr_seek);
+            sync_fs(sb.disk_name);
             return bytes;
         } else {
             if ((mof[myfd].curr_seek + count) > (inodes[mof[myfd].myfd].number_of_blocks * DATASIZE)) {
@@ -424,19 +465,22 @@ ssize_t mywrite(int myfd,const void *buf,size_t count){
                 numOfBlockToAlloc = numOfBlockToAlloc / DATASIZE;
                 allocate_more_blocks(myfd, numOfBlockToAlloc);
                 int bytes = writeToBlocks(inodes[mof[myfd].myfd].first_block, mof[myfd].curr_seek, buf, count);
+                mof[myfd].curr_seek+=bytes;
                 inodes[mof[myfd].myfd].number_of_blocks = (mof[myfd].curr_seek + DATASIZE) / DATASIZE;
-                printf("2) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
-                printf("2) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
-                printf("2) curr_seek: %d\n", mof[myfd].curr_seek);
-                sync_fs();
+//                printf("2) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
+//                printf("2) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
+//                printf("2) curr_seek: %d\n", mof[myfd].curr_seek);
+                sync_fs(sb.disk_name);
                 return bytes;
             }else{// don't need to resize
-                 int bytes = writeToBlocks(inodes[mof[myfd].myfd].first_block,mof[myfd].curr_seek,buf,count);
-                    inodes[mof[myfd].myfd].number_of_blocks = (mof[myfd].curr_seek + DATASIZE) /DATASIZE;
-                    printf("3) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
-                    printf("3) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
-                    printf("3) curr_seek: %d\n",  mof[myfd].curr_seek);
-                    return bytes;
+                int bytes = writeToBlocks(inodes[mof[myfd].myfd].first_block,mof[myfd].curr_seek,buf,count);
+                mof[myfd].curr_seek+=bytes;
+                inodes[mof[myfd].myfd].number_of_blocks = (mof[myfd].curr_seek + DATASIZE) /DATASIZE;
+//                printf("3) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
+//                printf("3) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
+//                printf("3) curr_seek: %d\n",  mof[myfd].curr_seek);
+                sync_fs(sb.disk_name);
+                return bytes;
             }
         }
     }
@@ -445,21 +489,23 @@ ssize_t mywrite(int myfd,const void *buf,size_t count){
             inodes[mof[myfd].myfd].first_block = find_empty_block();
             set_filesize(mof[myfd].myfd, count);
             int bytes = writeToBlocks(inodes[mof[myfd].myfd].first_block, mof[myfd].curr_seek, buf, count);
+            mof[myfd].curr_seek+=bytes;
             inodes[myfd].number_of_blocks = (DATASIZE + count) / DATASIZE;
-            printf("4) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
-            printf("4) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
-            printf("4) curr_seek: %d\n", mof[myfd].curr_seek);
-            sync_fs();
+//            printf("4) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
+//            printf("4) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
+//            printf("4) curr_seek: %d\n", mof[myfd].curr_seek);
+            sync_fs(sb.disk_name);
             return bytes;
         } else { // i write and i need to erase what i write and write again from the firstBlock
             clean_data(inodes[mof[myfd].myfd].first_block);
             set_filesize(myfd, count);
             int bytes = writeToBlocks(inodes[mof[myfd].myfd].first_block, mof[myfd].curr_seek, buf, count);
+            mof[myfd].curr_seek+=bytes;
             inodes[myfd].number_of_blocks = (count + DATASIZE) / DATASIZE;
-            printf("5) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
-            printf("5) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
-            printf("5) curr_seek: %d\n", mof[myfd].curr_seek);
-            sync_fs();
+//            printf("5) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
+//            printf("5) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
+//            printf("5) curr_seek: %d\n", mof[myfd].curr_seek);
+            sync_fs(sb.disk_name);
             return bytes;
         }
 
@@ -469,11 +515,12 @@ ssize_t mywrite(int myfd,const void *buf,size_t count){
             inodes[mof[myfd].myfd].first_block=find_empty_block();
             set_filesize(mof[mof[myfd].myfd].myfd,count);
             int bytes= writeToBlocks(inodes[mof[myfd].myfd].first_block,mof[myfd].curr_seek,buf,count);
+            mof[myfd].curr_seek+=bytes;
             inodes[mof[myfd].myfd].number_of_blocks=(count+DATASIZE)/DATASIZE ;
-            printf("6) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
-            printf("6) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
-            printf("6) curr_seek: %d\n",  mof[myfd].curr_seek);
-            sync_fs();
+//            printf("6) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
+//            printf("6) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
+//            printf("6) curr_seek: %d\n",  mof[myfd].curr_seek);
+            sync_fs(sb.disk_name);
             return bytes;
         }else{ // write from the end
             if (inodes[mof[myfd].myfd].datasize + count > (inodes[mof[myfd].myfd].number_of_blocks * DATASIZE)){
@@ -483,20 +530,22 @@ ssize_t mywrite(int myfd,const void *buf,size_t count){
                 numOfBlockToAlloc = numOfBlockToAlloc/DATASIZE;
                 allocate_more_blocks(mof[myfd].myfd,numOfBlockToAlloc);
                 int bytes = writeToBlocks(inodes[mof[myfd].myfd].first_block,mof[myfd].curr_seek,buf,count);
+                mof[myfd].curr_seek+=count;
                 inodes[myfd].number_of_blocks = (inodes[mof[myfd].myfd].datasize + DATASIZE) /DATASIZE;
-                printf("7) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
-                printf("7) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
-                printf("7) curr_seek: %d\n",  mof[myfd].curr_seek);
-                sync_fs();
+//                printf("7) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
+//                printf("7) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
+//                printf("7) curr_seek: %d\n",  mof[myfd].curr_seek);
+                sync_fs(sb.disk_name);
                 return bytes;
             }else{
                 mylseek(myfd,-1,SEEK_END);
                 int bytes = writeToBlocks(inodes[mof[myfd].myfd].first_block,mof[myfd].curr_seek,buf,count);
+                mof[myfd].curr_seek+=count;
                 inodes[mof[myfd].myfd].number_of_blocks = (inodes[myfd].datasize + DATASIZE) /DATASIZE;
-                printf("8) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
-                printf("8) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
-                printf("8) curr_seek: %d\n",  mof[myfd].curr_seek);
-                sync_fs();
+//                printf("8) datasize: %d\n", inodes[mof[myfd].myfd].datasize);
+//                printf("8) number_of_blocks: %d\n", inodes[mof[myfd].myfd].number_of_blocks);
+//                printf("8) curr_seek: %d\n",  mof[myfd].curr_seek);
+                sync_fs(sb.disk_name);
                 return bytes;
             }
         }
@@ -534,13 +583,17 @@ myDIR* myopendir(const char *name){
                 perror("It wasn't a dir\n");
                 return NULL;
             }
+//            printf("i have a dir now add to my openfile the new dir\n");
             int dirfd = add_to_myopenfile(i,-1);
+//            printf("dirfd %d\n",dirfd);
             if (dirfd == -1){
                 perror("couldn't add it to myopenfile\n");
                 return NULL;
             }
-            myDIR *ans = malloc(sizeof (myDIR));
+            myDIR *ans =(myDIR*) malloc(sizeof (myDIR));
             ans->dirp = dirfd; // pos in mof
+//            printf("dirfd %d\n",dirfd);
+//            printf("ans dirp is %d\n",ans->dirp);
             ans->pos = -1;
             return ans;
         }
@@ -579,13 +632,15 @@ myDIR* myopendir(const char *name){
     int dirpfd = add_to_myopenfile(inode_pos,-1);
     struct mydirent *newdir = malloc(sizeof(struct mydirent));
     newdir->size = 0;
-    for (size_t i = 0; i < 12; i++) {
+    newdir->fds[0]= inode_pos; // fds[0] will hold his own fd;
+    newdir->fds[1]= temp->dirp; // fds[1] will hold his previous dir fd;
+    for (size_t i = 2; i < 12; i++) {
         newdir->fds[i] = -1;
     }
     char *buf = (char *) newdir;
     writeToBlocks(inodes[inode_pos].first_block,0,buf, sizeof(struct mydirent));
     strcpy(newdir->name, name); //the name of the dir
-    sync_fs();
+    sync_fs(sb.disk_name);
     temp-> dirp = dirpfd;
     temp -> pos = -1;
     return temp;
@@ -604,7 +659,15 @@ struct mydirent *myreaddir(struct myDIR* dirp){
             dirp->pos++;
             for (int j = dirp->pos; j < 12 ; ++j) {
                 if (currDir->fds[j] != -1){
-                    strcpy(currDir->name,inodes[currDir->fds[j]].name);
+                    if (!strcmp(inodes[currDir->fds[j]].name,inodes[dirp->dirp].name)){
+                        strcpy(currDir->name,".");
+                    }
+                    else if(j==1){
+                        strcpy(currDir->name,"..");
+                    }
+                    else{
+                        strcpy(currDir->name,inodes[currDir->fds[j]].name);
+                    }
                     return currDir;
                 }
             }
@@ -637,7 +700,7 @@ void print_myfs(){
     printf("\tinodes\n");
     int i;
     for ( i = 0; i < sb.num_inodes ; ++i) {
-        printf("\tNunber of blocks: %d fblock: %d name: %s isDir: %d\n",inodes[i].number_of_blocks,inodes[i].first_block,inodes[i].name,inodes[i].isDir);
+        printf("\tNunber of blocks: %d fblock: %d name: %s isDir: %d Datasize: %d\n",inodes[i].number_of_blocks,inodes[i].first_block,inodes[i].name,inodes[i].isDir,inodes[i].datasize);
         if (inodes[i].isDir==1){
             struct mydirent *curr_dir = (struct mydirent*)dbs[inodes[i].first_block].data;
             printf("\tfds: ");
@@ -656,7 +719,7 @@ void print_myfs(){
         printf("my mount didn't happen yet\n");
     }else{
         for(i = 0; i <100 ; ++i) {
-            printf("\topenfilenum: %d myfd: %d flag: %d currseek: %d\n",i,mof[i].myfd,mof[i].flag, mof[i].curr_seek);
+            printf("\topenfilenum: %d myfd: %d flag: %d currseek: %d isDir %d \n",i,mof[i].myfd,mof[i].flag, mof[i].curr_seek , inodes[mof[i].myfd].isDir);
 
         }
     }

@@ -1,4 +1,4 @@
-#include "mymkfs.h"
+#include "myfs.h"
 
 int const freeBlock= -1;
 int const usedBlock= -2;

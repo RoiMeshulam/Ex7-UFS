@@ -2,32 +2,34 @@ CC=gcc
 AR=ar
 FLAGS= -Wall -g
 
-all: test mymkfs_test myFILE_test
+all: libmyfs.so libmylibc.so
 
-myFILE_test: myFile.o myFILE_test.o mymkfs.o
-	$(CC) $(FLAGS) -o myFILE_test myFILE_test.o mymkfs.o myFile.o
+test: mystdio_test myfs_test
 
-myFILE_test.o: myFILE_test.c
-	$(CC) $(FLAGS) -c myFILE_test.c
+libmylibc.so: mystdio.o myfs.o
+	$(CC) --shared -o libmylibc.so mystdio.o myfs.o
 
-mymkfs_test: mymkfs_test.o mymkfs.o
-	$(CC) $(FLAGS) -o mymkfs_test mymkfs_test.o mymkfs.o
+libmyfs.so: myfs.o
+	$(CC) --shared -fpic -o libmyfs.so myfs.o
 
-test: test.o mymkfs.o myFile.o
-	$(CC) $(FLAGS) -o test test.o mymkfs.o myFile.o
+mystdio_test: mystdio.o mystdio_test.o myfs.o
+	$(CC) $(FLAGS) -o mystdio_test mystdio_test.o myfs.o mystdio.o
 
-mymkfs_test.o: mymkfs_test.c
-	$(CC) $(FLAGS) -c mymkfs_test.c
+myfs_test: myfs_test.o myfs.o
+	$(CC) $(FLAGS) -o myfs_test myfs_test.o myfs.o
 
-test.o: test.c
-	$(CC) $(FLAGS) -c test.c
+mystdio_test.o: mystdio_test.c
+	$(CC) $(FLAGS) -c mystdio_test.c
 
-mymkfs.o: mymkfs.c mymkfs.h
-	$(CC) $(FLAGS) -c mymkfs.c
+myfs_test.o: myfs_test.c
+	$(CC) $(FLAGS) -c myfs_test.c
 
-myFile.o: myFILE.c mymkfs.h myFILE.h
-	$(CC) $(FLAGS) -c myFILE.c
+myfs.o: myfs.c myfs.h
+	$(CC) $(FLAGS) -c myfs.c
+
+mystdio.o: mystdio.c myfs.h mystdio.h
+	$(CC) $(FLAGS) -c mystdio.c
 
 .PHONY: clean all
 clean:
-	rm -f *.o test mymkfs_test myFILE_test
+	rm -f *.o mystdio_test myfs_test libmyfs.so libmylibc.so
